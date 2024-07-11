@@ -119,11 +119,8 @@ class Threat_CIA(models.Model):
 
 
 class Relation(models.Model):
-    # asset = models.ForeignKey(Asset, on_delete=models.CASCADE, null=True)
     protocol = models.ForeignKey(Protocol, on_delete=models.CASCADE, null=True)
     app = models.ForeignKey(MACM, on_delete=models.CASCADE, null=True)
-    # relation_type = models.CharField(max_length=100, null=True)
-    # role = models.CharField(max_length=100, null=True)
     source = models.ForeignKey(Asset, related_name='source_id', on_delete=models.CASCADE, null=True)
     target = models.ForeignKey(Asset, related_name='target_id', on_delete=models.CASCADE, null=True)
 

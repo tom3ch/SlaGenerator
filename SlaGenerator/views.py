@@ -295,8 +295,12 @@ def apps_management(request):
         for node in nodes:
             try:
                 apps[node['node']['app_id']] = node['node']['application']
-            except:
+            except IndexError as ie:
+                print('views:apps_management:apps[node]:IndexException' + ie)
+            except Exception:
                 print("Cannot parse graph with node " + str(node['node']))
+            except BaseException:
+                print('Unknown exception!')
         ordered_apps = collections.OrderedDict(sorted(apps.items()))
         # print(ordered_apps)
         for appId, application in ordered_apps.items():
@@ -316,26 +320,55 @@ def apps_management(request):
     return render(request, 'apps_management.html', context)
 
 
+# TC do query to neo4j DB
+def do_query(cipher_query):
+    records = []
+    try:
+        graph = GraphDatabase.driver(uri=neo4jUri, auth=(neo4jUsername, neo4jPassword))
+        session = graph.session()
+        nodes_string = session.run(cipher_query)
+        records = [record for record in nodes_string.data()]
+        session.close()
+    except IndexError as ie:
+        print('views:do_query:GraphDB_query:IndexException' + ie)
+    except Exception:
+        print("views:do_query:Exception: " + str(cipher_query))
+    except BaseException:
+        print('views:do_query:Unknown exception!')
+
+    return records
+
+
 def get_graphNodesbyAppId(appId):
-    graph = GraphDatabase.driver(uri=neo4jUri, auth=(neo4jUsername, neo4jPassword))
-    session = graph.session()
-    nodes_string = session.run("MATCH (node { app_id:  \'" + str(appId) + "\' }) RETURN "
-                                                                          "node,labels(node) as nodeType")
-    nodes = [record for record in nodes_string.data()]
-    session.close()
+    nodes = do_query("MATCH (node { app_id:  \'" + str(appId) + "\' }) RETURN node,labels(node) as nodeType")
     return nodes
 
 
-def get_graphRelationbyAppId(appId):
-    graph = GraphDatabase.driver(uri=neo4jUri, auth=(neo4jUsername, neo4jPassword))
-    session = graph.session()
-    nodes_string = session.run("MATCH (client { app_id:  \'" + str(
-        appId) + "\' }) -[relation]->(server) RETURN client,labels(client) as clientType,"
-                 " relation,TYPE(relation) as relationType,relation.protocol as protocol, "
-                 "server,labels(server) as serverType")
-    nodes = [record for record in nodes_string.data()]
-    session.close()
+def get_graphProtRelbyAppId(appId):
+    nodes = do_query("MATCH (client { app_id:  \'" + str(appId) + "\' }) -[relation:uses]->(server) \
+                     WHERE relation.protocol IS NOT NULL \
+                     RETURN client, relation.protocol, server;")
     return nodes
+
+
+def get_threat_list_from_role_relation(role, relations):
+    threats = []
+    a = Asset.objects.all().filter(name=relations[role]['name'])
+    asset_attribute_value = Asset_Attribute_value.objects.all().filter(asset_id=a[0].id)
+    for aav in asset_attribute_value:
+        ts = Threat_Attribute_value.objects.all().filter(attribute_value_id=aav.attribute_value.id)
+        for t in ts:
+            print(t.threat)
+            threats.append(t.threat)
+    return threats
+
+
+# TC Properties selection
+def get_graphPropertybyAppId(appId):
+    properties = do_query("MATCH (client {app_id: \'" + str(appId) + "\'})-[relationship:uses]->(destination) \
+        WHERE relationship.protocol IS NOT NULL \
+        RETURN client, destination, relationship;")
+    return properties
 
 
 def macm_viewer(request, appId):
@@ -345,37 +378,41 @@ def macm_viewer(request, appId):
 @csrf_exempt
 def risk_analysis(request, appId):
     app = MACM.objects.get(appId=appId)
-    appName = app.application
-    SelectedComponentName = ''
-    componentsWithThreats = []
+    app_name = app.application
+    selected_component_name = ''
+    components_with_threats = []
     components = Asset.objects.filter(app=app)
 
     try:
         if request.POST['dropdown']:
-            SelectedComponentName = request.POST['dropdown']
+            selected_component_name = request.POST['dropdown']
         else:
-            SelectedComponentName = components[0].name
+            selected_component_name = components[0].name
     except:
         print()
-    componentUnderAnalysis = components[0]
+    component_under_analysis = components[0]
     for component in components:
         if len(threat_modeling_per_assetFun(component.id)) != 0:
-            if SelectedComponentName == component.name:
-                componentsWithThreats.append((component, True))
-                componentUnderAnalysis = component
+            if selected_component_name == component.name:
+                components_with_threats.append((component, True))
+                component_under_analysis = component
             else:
-                componentsWithThreats.append((component, False))
+                components_with_threats.append((component, False))
 
-    threats = threat_modeling_per_assetFun(componentUnderAnalysis.id)
+    threats = threat_modeling_per_assetFun(component_under_analysis.id)
 
-    TAscores = ThreatAgentRiskScores.objects.filter(app=app)
+    ta_scores = ThreatAgentRiskScores.objects.filter(app=app)
 
     # ricerca ultimo risultato.
-    maxtimeTA = TAscores[0].updated_at
-    lastScore = TAscores[0]
-    for Tascore in TAscores:
-        if Tascore.updated_at > maxtimeTA:
-            lastScore = Tascore
+    if len(ta_scores) > 0:
+        ta_time_max = ta_scores[0].updated_at
+        last_score = ta_scores[0]
+        for ta_score in ta_scores:
+            if ta_score.updated_at > ta_time_max:
+                last_score = ta_score
+    else:
+        # in case of empty set
+        last_score = 0
 
     SIRecords = StrideImpactRecord.objects.filter(app=app)
 
@@ -481,8 +518,8 @@ def risk_analysis(request, appId):
             print("iNFO MISSING")
 
     return render(request, 'risk_analysis.html',
-                  {"appName": appName, "ComponentName": SelectedComponentName, "threats": threats,
-                   "components": componentsWithThreats, "ThreatAgentScores": lastScore, "appId": appId})
+                  {"appName": app_name, "ComponentName": selected_component_name, "threats": threats,
+                   "components": components_with_threats, "ThreatAgentScores": last_score, "appId": appId})
 
 
 def asset_management(request, appId):
@@ -515,7 +552,7 @@ def asset_management(request, appId):
 
     # save relation info in sqlite
 
-    arches = get_graphRelationbyAppId(appId)
+    arches = get_graphProtRelbyAppId(appId)
     for arch in arches:
         Asset_client = Asset.objects.all().filter(name=arch["client"]["name"], app=MACM.objects.get(appId=appId))
         Asset_server = Asset.objects.all().filter(name=arch["server"]["name"], app=MACM.objects.get(appId=appId))
@@ -579,8 +616,11 @@ def threat_modeling_per_asset(request, appId, assetId):
     try:
         asset = Asset.objects.all().filter(id=assetId)[0]
         asset_attribute_value = Asset_Attribute_value.objects.all().filter(asset_id=assetId)
-        threats_attribute_values = Threat_Attribute_value.objects.all().filter(
-            attribute_value_id=asset_attribute_value[0].attribute_value.id)
+        if len(asset_attribute_value) > 0:
+            threats_attribute_values = Threat_Attribute_value.objects.all().filter(
+                attribute_value_id=asset_attribute_value[0].attribute_value.id)
+        else:
+            threats_attribute_values = []
         for threat_attribute_value in threats_attribute_values:
             strides_per_threat = []
             affectedRequirements = []
@@ -595,6 +635,36 @@ def threat_modeling_per_asset(request, appId, assetId):
             threats.append((threat_attribute_value.threat, strides_per_threat, affectedRequirements))
     except:
         print("OutOfRange")
+
+    # Threat list per protocol
+    all_relations = []
+    relations_src = Relation.objects.all().filter(source=assetId)
+    relations_trg = Relation.objects.all().filter(target=assetId)
+    all_relations = relations_src | relations_trg
+    if len(all_relations) > 0:
+        for relation in all_relations:
+            print(relation.source.name, relation.target.name, relation.protocol.protocol, relation.source)
+            threat_per_protocol_list = get_threat_protocol(appId, relation)
+            for t_pro in threat_per_protocol_list:
+                strides_per_threat = []
+                affectedRequirements = []
+                try:
+                    for stride in Threat_Stride.objects.all().filter(threat=t_pro.id):
+                        strides_per_threat.append(stride.stride.category)
+                    for requirement in Threat_CIA.objects.all().filter(threat=t_pro.id):
+                        affectedRequirements.append(requirement.cia.requirement)
+                except:
+                    print("Error in selecting additional info")
+
+                if asset.id == relation.source.id:
+                    role = 'client'
+                elif asset.id == relation.target.id:
+                    role = 'target'
+                else:
+                    role = 'none'
+                threats.append((t_pro, strides_per_threat, affectedRequirements, role))
+    else:
+        print("view:threat_modeling_per_asset:relations: no relation")
 
     return render(request, 'threat_modeling_per_asset.html', {
         'threats': threats,
@@ -624,6 +694,18 @@ def threat_modeling_per_assetFun(assetId):
     except:
         print("OutOfRange")
     return threats
+
+# TC To support Threat list functionality
+def get_threat_protocol(app_id, relation):
+    threat_protocols = []
+    threat_protocols = Threat_Protocol.objects.all().filter(protocol_id=relation.protocol.id)
+    threats_protocol_per_asset = []
+    for threat_protocol in threat_protocols:
+        t = Threat.objects.all().filter(id=threat_protocol.threat_id)
+        if t is not None:
+            threats_protocol_per_asset.append(t[0])
+
+    return threats_protocol_per_asset
 
 
 def threat_modeling(appId):
