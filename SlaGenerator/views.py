@@ -352,6 +352,58 @@ def get_graphProtRelbyAppId(appId):
     return nodes
 
 
+def get_assets_relation(appId, relation_type, asset_name):
+    nodes = []
+    if relation_type == 'connects':
+        nodes.append(do_query("MATCH (s)-[r]->(t) WHERE EXISTS{(s{app_id: \"" + str(appId) + "\"})-[:" + relation_type + "]->({name: \"" + asset_name + "\"})} \
+                     RETURN s as source, r as relation, t as target;"))
+        # print(nodes)
+    elif relation_type == 'hosts':
+        nodes.extend(do_query("MATCH (source { app_id: \'" + str(appId) + "\'})-[relation: " + relation_type + "]->(target {name: \"" + asset_name + "\"}) \
+                     RETURN source, relation, target;"))
+        nodes.extend(do_query("MATCH (source { app_id: \'" + str(appId) + "\', name: \"" + asset_name + "\"})-[relation: " + relation_type + "]->(target) \
+                     RETURN source, relation, target;"))
+    elif relation_type == 'uses':
+        # TODO improve protocol management in the following query
+        nodes.extend(do_query("MATCH (source { app_id: \'" + str(appId) + "\'})-[relation: " + relation_type + "]->(target {name: \"" + asset_name + "\"}) \
+                     RETURN source, relation, target;"))
+        nodes.extend(do_query("MATCH (source { app_id: \'" + str(appId) + "\', name: \"" + asset_name + "\"})-[relation: " + relation_type + "]->(target) \
+                     RETURN source, relation, target;"))
+
+    # elif relation_type == 'provides':
+    #     nodes = do_query("MATCH (source { app_id: \'" + str(appId) + "\' }) -[relation: " + relation_type + "]->(target) \
+    #                  RETURN source, relation, target;")
+    # elif relation_type == 'processes':
+    #     nodes = do_query("MATCH (source { app_id: \'" + str(appId) + "\' }) -[relation: " + relation_type + "]->(target) \
+    #                  RETURN source, relation, target;")
+    else:
+        logging.warning('relation type is unknown!')
+
+    logging.debug(f'relation type= {relation_type}, nodes= {nodes}')
+    return nodes
+
+
+def get_assets_relation_all(appId, asset):
+    nodes = []
+    for n in get_assets_relation(appId, 'connects', asset.name)[0]:
+        print(n)
+        if n['target']['name'] != asset.name:
+            asset_attribute_value = Asset_Attribute_value.objects.all().filter(asset_id=asset.id)
+            if len(asset_attribute_value) > 0:
+                threats_attribute_values = Threat_Attribute_value.objects.all().filter(
+                    attribute_value_id=asset_attribute_value[0].attribute_value.id)
+            else:
+                threats_attribute_values = []
+
+            if len(threats_attribute_values) > 0:
+                for threats_attribute_value in threats_attribute_values:
+                    print(threats_attribute_value.threat)
+            nodes.append(n)
+    nodes.extend(get_assets_relation(appId, 'hosts', asset.name))
+    nodes.extend(get_assets_relation(appId, 'uses', asset.name))
+    return nodes
+
+
 def get_threat_list_from_role_relation(role, relations):
     threats = []
     a = Asset.objects.all().filter(name=relations[role]['name'])
@@ -361,6 +413,47 @@ def get_threat_list_from_role_relation(role, relations):
         for t in ts:
             print(t.threat)
             threats.append(t.threat)
+    return threats
+
+
+def get_threats_from_asset_relation(appId, asset, relations):
+    threats = []
+    for r in relations:
+        rt = r['relation'][1]
+        if rt == 'connects':
+            print("---")
+            print(rt)
+            if r['target']['name'] != asset.name:
+                print(r)
+                threats.extend(get_threat_list_from_role_relation('target', r))
+            print("---")
+        elif rt == 'hosts':
+            print("---")
+            print(rt)
+            if r['source']['name'] == asset.name:
+                print('source')
+                print(r)
+                threats.extend(get_threat_list_from_role_relation('target', r))
+            elif r['target']['name'] == asset.name:
+                print('target')
+                print(r)
+                threats.extend(get_threat_list_from_role_relation('source', r))
+            print("---")
+        elif rt == 'uses':
+            print("---")
+            print(rt)
+            if r['source']['name'] == asset.name:
+                print(f"source: {asset.name}, target: {r['target']['name']}")
+                threats.extend(get_threat_list_from_role_relation('target', r))
+            elif r['target']['name'] == asset.name:
+                print(f"target: {asset.name}, source: {r['source']['name']}")
+                print(r)
+                threats.extend(get_threat_list_from_role_relation('source', r))
+            print("---")
+        else:
+            print("No Threats by relation") # change to log
+
+    print(threats)
     return threats
 
 
@@ -632,9 +725,9 @@ def threat_modeling_per_asset(request, appId, assetId):
                     print("Error in selecting additional info")
 
                 if asset.id == relation.source.id:
-                    role = 'client'
+                    role = 'Client'
                 elif asset.id == relation.target.id:
-                    role = 'target'
+                    role = 'Server'
                 else:
                     logging.warning('asset.id is none!')
                     role = 'none'
@@ -643,10 +736,11 @@ def threat_modeling_per_asset(request, appId, assetId):
     else:
         logging.info('threat list per protocol is empty, no relation found!')
 
-    return render(request, 'threat_modeling_per_asset.html', {
-        'threats': threats,
-        'asset': asset}
-                  )
+    # Neighbouring
+    neighbour_threats = get_threats_from_asset_relation(appId, asset, get_assets_relation_all(appId, asset))
+
+    return render(request, 'threat_modeling_per_asset.html',
+                  {'threats': threats, 'asset': asset, 'neighbour_threats': neighbour_threats})
 
 
 def threat_modeling_per_assetFun(assetId):
