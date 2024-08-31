@@ -1,5 +1,6 @@
 import collections
 import logging
+import re
 from datetime import datetime
 from django.http import HttpResponse
 from openpyxl import Workbook
@@ -129,11 +130,12 @@ def union(lst1, lst2):
 
 @csrf_exempt
 def calculate_threat_agent_risks(request, appId):
+    # TODO NEXT to continue, automatic threat agent risk calculation
     OWASP_Motive_TOT = 0
     OWASP_Size_TOT = 0
     OWASP_Opportunity_TOT = 0
     OWASP_Skill_TOT = 0
-    somma_pesi = 0
+    somma_pesi = 1
 
     for category, risk_value in request.POST.items():
         TACategory = ThreatAgentCategory.objects.get(category=category)
