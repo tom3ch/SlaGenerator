@@ -469,6 +469,19 @@ def macm_viewer(request, appId):
     return render(request, 'macm_viewer.html', {'appId': appId})
 
 
+def get_conditions(conditions):
+    out = []
+    if conditions is not None and len(conditions) and conditions.isascii():
+        dm = {'n': 0, 'p': 1, 'f': 2}
+        match_result = re.match("^\[[npf],[npf],[npf]\]$", conditions)
+        if match_result:
+            vs = match_result.string[1:-1].split(',')
+            out = [dm[vs[0]], dm[vs[1]], dm[vs[2]]]
+    else:
+        logging.error('conditions are not strings!')
+    return out
+
+
 @csrf_exempt
 def risk_analysis(request, appId):
     app = MACM.objects.get(appId=appId)
@@ -478,10 +491,14 @@ def risk_analysis(request, appId):
     components = Asset.objects.filter(app=app)
 
     try:
-        if request.POST['dropdown']:
-            selected_component_name = request.POST['dropdown']
-        else:
-            selected_component_name = components[0].name
+        for rp in request.POST:
+            if rp == 'dropdown':
+                selected_component_name = request.POST['dropdown']
+            elif rp == 'save':
+                selected_component_name = request.POST['save']
+                # TODO Save evaluation and factors
+            else:
+                selected_component_name = components[0].name
     except IndexError:
         logging.error('bad index POST request!')
     except ReferenceError:
@@ -490,6 +507,7 @@ def risk_analysis(request, appId):
         logging.error('connection error POST request!')
     except Exception:
         logging.exception('unknown exception POST request!')
+
     component_under_analysis = components[0]
     for component in components:
         if len(threat_modeling_per_assetFun(component.id)) != 0:
@@ -516,106 +534,121 @@ def risk_analysis(request, appId):
 
     SIRecords = StrideImpactRecord.objects.filter(app=app)
 
-    PreCondition = "[n,n,n]"
-    PostCondition = "[n,n,n]"
-    LossOfConfidentiality = 0
-    LossOfIntegrity = 0
-    LossOfAvailability = 0
-    LossOfCPostConditionValue = 0
-    LossOfIPostConditionValue = 0
-    LossOfAPostConditionValue = 0
-    LossOfCPreConditionValue = 0
-    LossOfIPreConditionValue = 0
-    LossOfAPreConditionValue = 0
+    # TODO Deprecated
+    # PreCondition = "[n,n,n]"
+    # PostCondition = "[n,n,n]"
+    # LossOfConfidentiality = 0
+    # LossOfIntegrity = 0
+    # LossOfAvailability = 0
+    # LossOfCPostConditionValue = 0
+    # LossOfIPostConditionValue = 0
+    # LossOfAPostConditionValue = 0
+    # LossOfCPreConditionValue = 0
+    # LossOfIPreConditionValue = 0
+    # LossOfAPreConditionValue = 0
 
     for threat in threats:
-        PreCondition = str(threat[0].PreCondition)
-        PostCondition = str(threat[0].PostCondition)
-        maxFinancial = 0
-        maxReputation = 0
-        maxnoncompliance = 0
-        maxprivacy = 0
+        # Remember threat from threat_modeling_per_assetFun()
+        # threat => (threat_attribute_value.threat, strides_per_threat, affectedRequirements)
+        pre_condition = str(threat[0].PreCondition)
+        post_condition = str(threat[0].PostCondition)
+        v_max = [0, 0, 0, 0]  # [financial, reputation, noncompliance, privacy]
         for SIRecord in SIRecords:
-            for Threatstride in threat[1]:
-                if SIRecord.stride.category.lower() == Threatstride.lower():
-                    if maxFinancial < SIRecord.financialdamage:
-                        maxFinancial = SIRecord.financialdamage
-                    if maxReputation < SIRecord.reputationdamage:
-                        maxReputation = SIRecord.reputationdamage
-                    if maxnoncompliance < SIRecord.noncompliance:
-                        maxnoncompliance = SIRecord.noncompliance
-                    if maxprivacy < SIRecord.privacyviolation:
-                        maxprivacy = SIRecord.privacyviolation
-        threat[0].financial = maxFinancial
-        threat[0].reputation = maxReputation
-        threat[0].noncompliance = maxnoncompliance
-        threat[0].privacy = maxprivacy
+            for t_stride in threat[1]:
+                if SIRecord.stride.category.lower() == t_stride.lower():
+                    v_max[0] = max(v_max[0], SIRecord.financialdamage)
+                    v_max[1] = max(v_max[1], SIRecord.reputationdamage)
+                    v_max[2] = max(v_max[2], SIRecord.noncompliance)
+                    v_max[3] = max(v_max[3], SIRecord.privacyviolation)
+        threat[0].financial = v_max[0]
+        threat[0].reputation = v_max[1]
+        threat[0].noncompliance = v_max[2]
+        threat[0].privacy = v_max[3]
 
-        # elimino [ e ]
+                    # TODO Deprecated
+                    # if maxFinancial < SIRecord.financialdamage:
+                    #     maxFinancial = SIRecord.financialdamage
+                    # if maxReputation < SIRecord.reputationdamage:
+                    #     maxReputation = SIRecord.reputationdamage
+                    # if maxnoncompliance < SIRecord.noncompliance:
+                    #     maxnoncompliance = SIRecord.noncompliance
+                    # if maxprivacy < SIRecord.privacyviolation:
+                    #     maxprivacy = SIRecord.privacyviolation
 
-        try:
-            PreCondition.replace("[", "")
-            PreCondition.replace("]", "")
-            PostCondition.replace("[", "")
-            PostCondition.replace("]", "")
+        v_pre_cnd = get_conditions(pre_condition)
+        v_post_cnd = get_conditions(post_condition)
+        threat[0].lossofc = ((v_pre_cnd[0] + v_post_cnd[0]) * 3) + 1
+        threat[0].lossofi = ((v_pre_cnd[1] + v_post_cnd[1]) * 3) + 1
+        threat[0].lossofa = ((v_pre_cnd[2] + v_post_cnd[2]) * 3) + 1
 
-            # splitto con le ,
-            PreCondition = PreCondition.split(",")
-            PostCondition = PostCondition.split(",")
+        logging.debug(f'threat: [LoC: {threat[0].lossofc}, LoI: {threat[0].lossofi}, LoA: {threat[0].lossofa}]')
 
-            if PreCondition[0] == 'n':
-                LossOfCPreConditionValue = 0
-            if PreCondition[0] == 'p':
-                LossOfCPreConditionValue = 1
-            if PreCondition[0] == 'f':
-                LossOfCPreConditionValue = 2
+        # TODO Deprecated
+        # try:
+        #     PreCondition.replace("[", "")
+        #     PreCondition.replace("]", "")
+        #     PostCondition.replace("[", "")
+        #     PostCondition.replace("]", "")
+        #
+        #     # splitto con le ,
+        #     PreCondition = PreCondition.split(",")
+        #     PostCondition = PostCondition.split(",")
+        #
+        #     if PreCondition[0] == 'n':
+        #         LossOfCPreConditionValue = 0
+        #     if PreCondition[0] == 'p':
+        #         LossOfCPreConditionValue = 1
+        #     if PreCondition[0] == 'f':
+        #         LossOfCPreConditionValue = 2
+        #
+        #     if PostCondition[0] == 'n':
+        #         LossOfCPostConditionValue = 0
+        #     if PostCondition[0] == 'p':
+        #         LossOfCPostConditionValue = 1
+        #     if PostCondition[0] == 'f':
+        #         LossOfCPostConditionValue = 2
+        #
+        #     LossOfConfidentiality = ((LossOfCPostConditionValue + LossOfCPreConditionValue) * 3) + 1
+        #
+        #     if PreCondition[1] == 'n':
+        #         LossOfIPreConditionValue = 0
+        #     if PreCondition[1] == 'p':
+        #         LossOfIPreConditionValue = 1
+        #     if PreCondition[1] == 'f':
+        #         LossOfIPreConditionValue = 2
+        #
+        #     if PostCondition[1] == 'n':
+        #         LossOfIPostConditionValue = 0
+        #     if PostCondition[1] == 'p':
+        #         LossOfIPostConditionValue = 1
+        #     if PostCondition[1] == 'f':
+        #         LossOfIPostConditionValue = 2
+        #
+        #     LossOfIntegrity = ((LossOfIPostConditionValue + LossOfIPreConditionValue) * 3) + 1
+        #
+        #     if PreCondition[2] == 'n':
+        #         LossOfAPreConditionValue = 0
+        #     if PreCondition[2] == 'p':
+        #         LossOfAPreConditionValue = 1
+        #     if PreCondition[2] == 'f':
+        #         LossOfAPreConditionValue = 2
+        #     if PostCondition[2] == 'n':
+        #         LossOfAPostConditionValue = 0
+        #     if PostCondition[2] == 'p':
+        #         LossOfAPostConditionValue = 1
+        #     if PostCondition[2] == 'f':
+        #         LossOfAPostConditionValue = 2
+        #
+        #     LossOfAvailability = ((LossOfAPostConditionValue + LossOfAPreConditionValue) * 3) + 1
+        #
+        #     threat[0].lossofc = LossOfConfidentiality
+        #     threat[0].lossofi = LossOfIntegrity
+        #     threat[0].lossofa = LossOfAvailability
+        #
+        # except:
+        #     print("iNFO MISSING")
 
-            if PostCondition[0] == 'n':
-                LossOfCPostConditionValue = 0
-            if PostCondition[0] == 'p':
-                LossOfCPostConditionValue = 1
-            if PostCondition[0] == 'f':
-                LossOfCPostConditionValue = 2
-
-            LossOfConfidentiality = ((LossOfCPostConditionValue + LossOfCPreConditionValue) * 3) + 1
-
-            if PreCondition[1] == 'n':
-                LossOfIPreConditionValue = 0
-            if PreCondition[1] == 'p':
-                LossOfIPreConditionValue = 1
-            if PreCondition[1] == 'f':
-                LossOfIPreConditionValue = 2
-
-            if PostCondition[1] == 'n':
-                LossOfIPostConditionValue = 0
-            if PostCondition[1] == 'p':
-                LossOfIPostConditionValue = 1
-            if PostCondition[1] == 'f':
-                LossOfIPostConditionValue = 2
-
-            LossOfIntegrity = ((LossOfIPostConditionValue + LossOfIPreConditionValue) * 3) + 1
-
-            if PreCondition[2] == 'n':
-                LossOfAPreConditionValue = 0
-            if PreCondition[2] == 'p':
-                LossOfAPreConditionValue = 1
-            if PreCondition[2] == 'f':
-                LossOfAPreConditionValue = 2
-            if PostCondition[2] == 'n':
-                LossOfAPostConditionValue = 0
-            if PostCondition[2] == 'p':
-                LossOfAPostConditionValue = 1
-            if PostCondition[2] == 'f':
-                LossOfAPostConditionValue = 2
-
-            LossOfAvailability = ((LossOfAPostConditionValue + LossOfAPreConditionValue) * 3) + 1
-
-            threat[0].lossofc = LossOfConfidentiality
-            threat[0].lossofi = LossOfIntegrity
-            threat[0].lossofa = LossOfAvailability
-
-        except:
-            print("iNFO MISSING")
+        # TODO NEXT Separation between ThreatCatalogu and ThreatModel (actually missing)
 
     return render(request, 'risk_analysis.html',
                   {"appName": app_name, "ComponentName": selected_component_name, "threats": threats,
@@ -631,6 +664,7 @@ def asset_management(request, appId):
     # connect to neo4j only if sqlite assets are empty (API are laggy)
     if not nodes:
         nodes = get_graphNodesbyAppId(appId)
+        # TODO improve node management with an advanced query in the function do_query()
         for node in nodes:
             # print(node["node"]["name"]+" "+ node["node"]["type"])
             # print(node)
@@ -713,6 +747,7 @@ def threat_modeling_per_asset(request, appId, assetId):
         for relation in all_relations:
             logging.debug(f"src= {relation.source.name}, trg= {relation.target.name}, prt= {relation.protocol.protocol}, src.id= {relation.source}")
             threat_per_protocol_list = get_threat_protocol(appId, relation)
+            # TODO select only distinct threats, remove threat duplicates
             for t_pro in threat_per_protocol_list:
                 strides_per_threat = []
                 affectedRequirements = []
@@ -724,6 +759,7 @@ def threat_modeling_per_asset(request, appId, assetId):
                 except:
                     print("Error in selecting additional info")
 
+                # TODO manage the case of asset with both source and target role.
                 if asset.id == relation.source.id:
                     role = 'Client'
                 elif asset.id == relation.target.id:
@@ -766,7 +802,7 @@ def threat_modeling_per_assetFun(assetId):
         print("OutOfRange")
     return threats
 
-# TC To support Threat list functionality
+
 def get_threat_protocol(app_id, relation):
     threat_protocols = []
     threat_protocols = Threat_Protocol.objects.all().filter(protocol_id=relation.protocol.id)
