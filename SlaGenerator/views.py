@@ -1,4 +1,5 @@
 import collections
+import logging
 from datetime import datetime
 from django.http import HttpResponse
 from openpyxl import Workbook
@@ -388,8 +389,14 @@ def risk_analysis(request, appId):
             selected_component_name = request.POST['dropdown']
         else:
             selected_component_name = components[0].name
-    except:
-        print()
+    except IndexError:
+        logging.error('bad index POST request!')
+    except ReferenceError:
+        logging.error('bad reference POST request!')
+    except ConnectionError:
+        logging.error('connection error POST request!')
+    except Exception:
+        logging.exception('unknown exception POST request!')
     component_under_analysis = components[0]
     for component in components:
         if len(threat_modeling_per_assetFun(component.id)) != 0:
@@ -553,6 +560,8 @@ def asset_management(request, appId):
     # save relation info in sqlite
 
     arches = get_graphProtRelbyAppId(appId)
+    logging.debug(arches)
+    logging.info("graph relations loaded successfully!")
     for arch in arches:
         Asset_client = Asset.objects.all().filter(name=arch["client"]["name"], app=MACM.objects.get(appId=appId))
         Asset_server = Asset.objects.all().filter(name=arch["server"]["name"], app=MACM.objects.get(appId=appId))
@@ -630,20 +639,21 @@ def threat_modeling_per_asset(request, appId, assetId):
                 for requirement in Threat_CIA.objects.all().filter(threat=threat_attribute_value.threat):
                     affectedRequirements.append(requirement.cia.requirement)
             except:
-                print("Error in selecting additional info")
+                logging.error("Error in selecting additional threat info!")
 
             threats.append((threat_attribute_value.threat, strides_per_threat, affectedRequirements))
     except:
-        print("OutOfRange")
+        logging.error("OutOfRange!")
 
     # Threat list per protocol
     all_relations = []
     relations_src = Relation.objects.all().filter(source=assetId)
     relations_trg = Relation.objects.all().filter(target=assetId)
     all_relations = relations_src | relations_trg
+    logging.debug(f'all_relation: {all_relations}')
     if len(all_relations) > 0:
         for relation in all_relations:
-            print(relation.source.name, relation.target.name, relation.protocol.protocol, relation.source)
+            logging.debug(f"src= {relation.source.name}, trg= {relation.target.name}, prt= {relation.protocol.protocol}, src.id= {relation.source}")
             threat_per_protocol_list = get_threat_protocol(appId, relation)
             for t_pro in threat_per_protocol_list:
                 strides_per_threat = []
@@ -661,10 +671,12 @@ def threat_modeling_per_asset(request, appId, assetId):
                 elif asset.id == relation.target.id:
                     role = 'target'
                 else:
+                    logging.warning('asset.id is none!')
                     role = 'none'
+                logging.debug(f'({t_pro}, {strides_per_threat}, {affectedRequirements}, {role})')
                 threats.append((t_pro, strides_per_threat, affectedRequirements, role))
     else:
-        print("view:threat_modeling_per_asset:relations: no relation")
+        logging.info('threat list per protocol is empty, no relation found!')
 
     return render(request, 'threat_modeling_per_asset.html', {
         'threats': threats,
@@ -699,11 +711,14 @@ def threat_modeling_per_assetFun(assetId):
 def get_threat_protocol(app_id, relation):
     threat_protocols = []
     threat_protocols = Threat_Protocol.objects.all().filter(protocol_id=relation.protocol.id)
+    logging.debug(threat_protocols)
     threats_protocol_per_asset = []
     for threat_protocol in threat_protocols:
         t = Threat.objects.all().filter(id=threat_protocol.threat_id)
         if t is not None:
             threats_protocol_per_asset.append(t[0])
+
+    logging.debug(threats_protocol_per_asset)
 
     return threats_protocol_per_asset
 
