@@ -373,7 +373,7 @@ def get_graphPropertybyAppId(appId):
 
 
 def macm_viewer(request, appId):
-    return render(request, 'macm_viewer.html')
+    return render(request, 'macm_viewer.html', {'appId': appId})
 
 
 @csrf_exempt
