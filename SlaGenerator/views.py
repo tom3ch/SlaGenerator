@@ -562,56 +562,21 @@ def asset_management(request, appId):
     arches = get_graphProtRelbyAppId(appId)
     logging.debug(arches)
     logging.info("graph relations loaded successfully!")
+    # TODO improve relation management with an advanced query in the function do_query()
     for arch in arches:
-        Asset_client = Asset.objects.all().filter(name=arch["client"]["name"], app=MACM.objects.get(appId=appId))
-        Asset_server = Asset.objects.all().filter(name=arch["server"]["name"], app=MACM.objects.get(appId=appId))
+        p = Protocol.objects.all().filter(protocol=arch['relation.protocol'])
+        c = Asset.objects.all().filter(name=arch['client']['name'], app=MACM.objects.get(appId=appId))
+        s = Asset.objects.all().filter(name=arch['server']['name'], app=MACM.objects.get(appId=appId))
+        if len(p) == 1 and len(c) == 1 and len(s) == 1:
+            Relation.objects.all().get_or_create(protocol=p[0],
+                                                 app=MACM.objects.get(appId=appId),
+                                                 source=c[0],
+                                                 target=s[0])
+            relations.append((p[0].id, c[0].id, s[0].id, p[0].protocol, c[0].name, s[0].name))
+        else:
+            logging.warning(f'duplication! multiple objects are returned in prt= {p}, cli= {c}, srv= {s}, \
+            it is expected only one')
 
-        if arch["protocol"] is None:
-            print()
-        elif isinstance(arch["protocol"], str):
-            # single protocol in one arch
-            try:
-                Relation.objects.all().get_or_create(asset=Asset.objects.get(name=arch["client"]["name"],
-                                                                             app=MACM.objects.get(appId=appId)),
-                                                     protocol=Protocol.objects.get(protocol=arch["protocol"]),
-                                                     app=MACM.objects.get(appId=appId),
-                                                     relation_type=arch["relationType"],
-                                                     role="client")
-                Relation.objects.all().get_or_create(asset=Asset.objects.get(name=arch["server"]["name"],
-                                                                             app=MACM.objects.get(appId=appId)),
-                                                     protocol=Protocol.objects.get(protocol=arch["protocol"]),
-                                                     app=MACM.objects.get(appId=appId),
-                                                     relation_type=arch["relationType"],
-                                                     role="server")
-            except:
-                print()
-                # print("Protocol info not found in arch between " + str(arch["client"]["name"]) + " and " + str(
-                # arch["server"]["name"]))
-        elif isinstance(arch["protocol"], list):
-            for protocol in arch["protocol"]:
-                # print(protocol)
-                # multiple protocol in one arch
-                try:
-                    Relation.objects.all().get_or_create(asset=Asset.objects.get(name=arch["client"]["name"],
-                                                                                 app=MACM.objects.get(appId=appId)),
-                                                         protocol=Protocol.objects.get(protocol=protocol),
-                                                         app=MACM.objects.get(appId=appId),
-                                                         relation_type=arch["relationType"],
-                                                         role="client")
-                    Relation.objects.all().get_or_create(asset=Asset.objects.get(name=arch["server"]["name"],
-                                                                                 app=MACM.objects.get(appId=appId)),
-                                                         protocol=Protocol.objects.get(protocol=protocol),
-                                                         app=MACM.objects.get(appId=appId),
-                                                         relation_type=arch["relationType"],
-                                                         role="server")
-                except:
-                    print()
-                    # print("Protocol info not found in arch between " + str(arch["client"]["name"]) + " and " + str(
-                    #   arch["server"]["name"]))
-            else:
-                print("error getting protocol information")
-        # we consider only relations with some associated properties
-        relations = Relation.objects.all().filter(app=MACM.objects.get(appId=appId))
     return render(request, 'asset_management.html', {
         'nodes': nodes,
         'relations': relations,
